@@ -1,11 +1,11 @@
 // ==UserScript==
-// @name                B站视频解析脚本
+// @name                B站视频解析脚本[v1.5]
 // @namespace           http://tampermonkey.net/
-// @version             1.0
+// @version             1.5
 // @description         在B站视频页添加解析视频按钮
 // @author              Waves_Man
 // @author-github       https://github.com/WavesMan
-// @author-homepage     http://home.waveyo.cn
+// @author-homepage     https://home.waveyo.cn
 // @match               https://www.bilibili.com/video/*
 // @icon                https://cloud.waveyo.cn//Services/websites/home/images/icon/favicon.ico
 // @original-script     https://scriptcat.org/zh-CN/script-show-page/2682/
@@ -16,118 +16,218 @@
 (function() {
     'use strict';
 
-    // 获取视频的BV号
-    const bvId = window.location.pathname.split('/')[2];
+    // ====================== 位置控制器 ======================
+    class PositionController {
+        constructor() {
+            this.config = {
+                mainButton: {
+                    right: '5%',
+                    bottom: '5%',
+                    minMargin: 50
+                },
+                modal: {
+                    width: 300,
+                    offsetY: 40,
+                    padding: 20
+                },
+                actionButtons: {
+                    spacing: 10,
+                    width: 'auto',
+                    marginRight: 10
+                },
+                outputArea: {
+                    height: 100,
+                    marginTop: 10
+                }
+            };
+        }
 
-    // 在脚本开头定义按钮位置参数
-    const buttonPositionTop = '820px'; // 可以调整
-    const buttonPositionRight = '800px'; // 可以调整
+        calculateValue(value, base) {
+            if (typeof value === 'string' && value.endsWith('%')) {
+                return (parseFloat(value) / 100) * base;
+            }
+            return parseFloat(value);
+        }
+
+        getMainButtonPosition() {
+            const viewportWidth = window.innerWidth;
+            const viewportHeight = window.innerHeight;
+            const cfg = this.config.mainButton;
+
+            const right = Math.max(
+                this.calculateValue(cfg.right, viewportWidth),
+                cfg.minMargin
+            );
+            const bottom = Math.max(
+                this.calculateValue(cfg.bottom, viewportHeight),
+                cfg.minMargin
+            );
+
+            return { right, bottom };
+        }
+
+        getModalPosition(buttonBottom, buttonRight) {
+            const cfg = this.config.modal;
+            return {
+                right: buttonRight,
+                bottom: buttonBottom + cfg.offsetY,
+                width: cfg.width,
+                padding: cfg.padding
+            };
+        }
+
+        getActionButtonStyles() {
+            const cfg = this.config.actionButtons;
+            return {
+                width: cfg.width,
+                marginRight: cfg.marginRight,
+                display: 'inline-block'
+            };
+        }
+
+        getOutputAreaStyles() {
+            const cfg = this.config.outputArea;
+            return {
+                height: cfg.height,
+                marginTop: cfg.marginTop
+            };
+        }
+    }
+
+    // ====================== 主要逻辑 ======================
+    const positionCtrl = new PositionController();
+    const cache = new Map();
+
+    // API服务
+    const ApiService = {
+        async getVideoInfo(bvid) {
+            const response = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`);
+            return response.json();
+        },
+        
+        async getPlayUrl(bvid, cid) {
+            const url = `https://api.bilibili.com/x/player/playurl?bvid=${bvid}&cid=${cid}&qn=64&fnval=1&fnver=0&fourk=0&platform=html5`;
+            
+            const headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3',
+                'Referer': 'https://www.bilibili.com/'
+            };
+
+            const response = await fetch(url, { headers });
+            return response.json();
+        }
+    };
+
+    // 带缓存的请求
+    async function fetchWithCache(key, fetchFn) {
+        if (cache.has(key)) {
+            return cache.get(key);
+        }
+        const result = await fetchFn();
+        cache.set(key, result);
+        return result;
+    }
 
     // 创建按钮
-    const button = document.createElement('button');
-    button.innerText = '解析视频';
-    button.style.position = 'fixed';
-    button.style.top = buttonPositionTop; // 使用参数
-    button.style.right = buttonPositionRight; // 使用参数
-    button.style.zIndex = '9999';
-    button.style.padding = '10px 15px';
-    button.style.backgroundColor = '#4CAF50';
-    button.style.color = '#fff';
-    button.style.border = 'none';
-    button.style.borderRadius = '5px';
-    button.style.cursor = 'pointer';
+    function createButton(text, styles = {}, onClick = null) {
+        const button = document.createElement('button');
+        button.innerText = text;
+        Object.assign(button.style, {
+            position: 'relative',
+            zIndex: '9999',
+            padding: '10px 15px',
+            backgroundColor: '#4CAF50',
+            color: '#fff',
+            border: 'none',
+            borderRadius: '5px',
+            cursor: 'pointer',
+            transition: 'all 0.3s',
+            ...styles
+        });
+        if (onClick) button.onclick = onClick;
+        return button;
+    }
 
+    // 主逻辑
+    const bvId = window.location.pathname.split('/')[2];
+    const btnPos = positionCtrl.getMainButtonPosition();
 
-    // 创建浮动窗口
+    // 创建主按钮
+    const button = createButton('解析视频', {
+        position: 'fixed',
+        right: `${btnPos.right}px`,
+        bottom: `${btnPos.bottom}px`
+    });
+
+    // 创建弹窗
     const modal = document.createElement('div');
-    modal.style.display = 'none'; // 初始隐藏
-    modal.style.position = 'fixed';
-    modal.style.top = '520px'; // 调整为在按钮下方
-    modal.style.right = '550px'; // 与按钮对齐
-    modal.style.width = '300px';
-    modal.style.padding = '20px';
-    modal.style.backgroundColor = '#fff';
-    modal.style.boxShadow = '0 0 10px rgba(0,0,0,0.5)';
-    modal.style.zIndex = '10000';
+    const modalPos = positionCtrl.getModalPosition(btnPos.bottom, btnPos.right);
+    Object.assign(modal.style, {
+        display: 'none',
+        position: 'fixed',
+        right: `${modalPos.right}px`,
+        bottom: `${modalPos.bottom}px`,
+        width: `${modalPos.width}px`,
+        padding: `${modalPos.padding}px`,
+        backgroundColor: '#fff',
+        boxShadow: '0 0 10px rgba(0,0,0,0.5)',
+        zIndex: '10000'
+    });
 
-    // 创建“开始解析”按钮
-    const startButton = document.createElement('button');
-    startButton.innerText = '开始解析';
-    startButton.style.marginRight = '10px';
-    // New style
-    startButton.style.border = 'none'; // 去掉边框
-    startButton.style.borderRadius = '5px'; // 圆角
-    startButton.style.backgroundColor = '#4CAF50'; // 设置背景颜色
-    startButton.style.color = '#fff'; // 设置字体颜色
-    startButton.style.padding = '10px 15px'; // 增加内边距
-    startButton.style.display = 'block'; // 确保它在新的一行
-    //
-    startButton.onclick = async () => {
-        outputArea.innerText = `正在解析 BV号: ${bvId}...`;
-
+    // 创建功能按钮
+    const btnStyles = positionCtrl.getActionButtonStyles();
+    const startButton = createButton('开始解析', {
+        width: btnStyles.width,
+        marginRight: btnStyles.marginRight,
+        display: btnStyles.display
+    }, async () => {
+        outputArea.innerHTML = '<div style="text-align:center;">加载中...</div>';
+        
         try {
-            // 发送请求获取视频数据
-            const response = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bvId}`);
-            const data = await response.json();
+            outputArea.innerText = `正在解析 BV号: ${bvId}...`;
+            
+            const data = await fetchWithCache(
+                `video-info-${bvId}`,
+                () => ApiService.getVideoInfo(bvId)
+            );
 
             if (data.code === 0) {
-                const cid = data.data.cid; // 提取cid
-                // 发送请求获取播放链接
-                await fetchPlayUrl(bvId, cid);
+                const cid = data.data.cid;
+                const playData = await fetchWithCache(
+                    `play-url-${bvId}-${cid}`,
+                    () => ApiService.getPlayUrl(bvId, cid)
+                );
+                
+                if (playData.code === 0) {
+                    // 确保URL从顶部开始显示并自动换行
+                    outputArea.innerHTML = '';
+                    const urlText = document.createElement('div');
+                    urlText.style.whiteSpace = 'pre-wrap';
+                    urlText.style.wordBreak = 'break-all';
+                    urlText.style.textAlign = 'left';
+                    urlText.style.overflowAnchor = 'none';
+                    urlText.style.color = '#333';
+                    urlText.textContent = playData.data.durl[0].url;
+                    outputArea.appendChild(urlText);
+                    outputArea.scrollTop = 0; // 确保滚动到顶部
+                } else {
+                    outputArea.innerText = '获取播放链接失败。';
+                }
             } else {
                 outputArea.innerText = '解析失败，无法获取视频信息。';
             }
         } catch (error) {
             outputArea.innerText = '请求失败，请检查网络。';
-            console.error('Error fetching video data:', error);
+            console.error('Error:', error);
         }
-    };
+    });
 
-    // 获取播放链接的函数
-    async function fetchPlayUrl(bvid, cid) {
-        const url = `https://api.bilibili.com/x/player/playurl?bvid=${bvid}&cid=${cid}&qn=64&fnval=1&fnver=0&fourk=0&platform=html5`;
-        const headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3',
-            'Referer': 'https://www.bilibili.com/'
-        };
-
-        try {
-            const response = await fetch(url, { headers });
-            const data = await response.json();
-
-            if (data.code === 0) {
-                const videoUrl = data.data.durl[0].url; // 获取第一个视频链接
-                outputArea.innerText = videoUrl; // 仅输出视频链接
-            } else {
-                outputArea.innerText = '获取播放链接失败。';
-            }
-        } catch (error) {
-            outputArea.innerText = '请求播放链接失败。';
-            console.error('Error fetching play URL:', error);
-        }
-    }
-
-    // 创建输出区域
-    const outputArea = document.createElement('div');
-    outputArea.style.marginTop = '10px'; // 输出区域与上方元素的间距
-    outputArea.style.height = '100px'; // 增加输出区域的高度
-    outputArea.style.border = '1px solid #ccc';
-    outputArea.style.padding = '5px';
-    outputArea.style.overflowY = 'auto';
-    outputArea.style.whiteSpace = 'pre-wrap'; // 保持换行
-
-    // 创建“复制URL”按钮
-    const copyButton = document.createElement('button');
-    copyButton.style.marginTop = '10px'; // 输出区域与上方元素的间距
-    copyButton.innerText = '复制URL';
-    copyButton.style.padding = '10px 15px'; // 增加内边距
-    copyButton.style.backgroundColor = '#4CAF50'; // 设置背景颜色
-    copyButton.style.color = '#fff'; // 设置字体颜色
-    copyButton.style.border = 'none'; // 去掉边框
-    copyButton.style.borderRadius = '5px'; // 圆角
-    copyButton.style.cursor = 'pointer'; // 鼠标悬停时变为手型
-    copyButton.onclick = () => {
-        const videoUrl = outputArea.innerText.trim(); // 获取输出区域的链接
+    const copyButton = createButton('复制URL', {
+        width: btnStyles.width,
+        marginRight: btnStyles.marginRight,
+        display: btnStyles.display
+    }, () => {
+        const videoUrl = outputArea.innerText.trim();
         if (videoUrl) {
             navigator.clipboard.writeText(videoUrl).then(() => {
                 outputArea.innerText = '视频链接已复制到剪贴板！';
@@ -137,54 +237,73 @@
         } else {
             outputArea.innerText = '没有视频链接可复制。';
         }
-    };
+    });
 
+    const closeButton = createButton('关闭', {
+        width: btnStyles.width,
+        display: btnStyles.display
+    }, () => {
+        modal.style.display = 'none';
+        outputArea.innerText = '';
+    });
 
-    // 创建关闭按钮
-    const closeButton = document.createElement('button');
-    closeButton.innerText = '关闭';
-    closeButton.style.marginTop = '10px';
-    // New style
-    closeButton.style.border = 'none'; // 去掉边框
-    closeButton.style.borderRadius = '5px'; // 圆角
-    closeButton.style.backgroundColor = '#4CAF50'; // 设置背景颜色
-    closeButton.style.color = '#fff'; // 设置字体颜色
-    closeButton.style.padding = '10px 15px'; // 增加内边距
-    closeButton.style.display = 'block'; // 确保它在新的一行
-    //
-    closeButton.onclick = () => {
-        modal.style.display = 'none'; // 隐藏模态窗口
-        outputArea.innerText = ''; // 清空输出区域
-    };
+    // 创建输出区域（更新样式确保URL正确显示）
+    const outputStyles = positionCtrl.getOutputAreaStyles();
+    const outputArea = document.createElement('div');
+    Object.assign(outputArea.style, {
+        marginTop: `${outputStyles.marginTop}px`,
+        height: `${outputStyles.height}px`,
+        border: '1px solid #ccc',
+        padding: '5px',
+        overflowY: 'auto',
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-all',
+        textAlign: 'left',
+        overflowAnchor: 'none'
+    });
 
-    // 将按钮和窗口添加到页面
-    modal.appendChild(startButton);
+    // 组装UI
+    const buttonContainer = document.createElement('div');
+    buttonContainer.style.marginBottom = '10px';
+    buttonContainer.appendChild(startButton);
+    buttonContainer.appendChild(copyButton);
+    buttonContainer.appendChild(closeButton);
+
+    modal.appendChild(buttonContainer);
     modal.appendChild(outputArea);
-    modal.appendChild(copyButton);
-    modal.appendChild(closeButton); // 关闭按钮在最后
 
     document.body.appendChild(button);
     document.body.appendChild(modal);
 
-    // 按钮点击事件
+    // 主按钮点击事件
     button.onclick = () => {
-        modal.style.display = 'block'; // 显示模态窗口
-        outputArea.innerText = ''; // 清空输出区域
+        modal.style.display = modal.style.display === 'none' ? 'block' : 'none';
+        if (modal.style.display === 'block') {
+            outputArea.innerHTML = '';
+        }
     };
 
-    // 添加样式以改善用户体验
+    // 窗口大小变化时重新计算位置
+    window.addEventListener('resize', () => {
+        const newBtnPos = positionCtrl.getMainButtonPosition();
+        button.style.right = `${newBtnPos.right}px`;
+        button.style.bottom = `${newBtnPos.bottom}px`;
+        
+        const newModalPos = positionCtrl.getModalPosition(newBtnPos.bottom, newBtnPos.right);
+        modal.style.right = `${newModalPos.right}px`;
+        modal.style.bottom = `${newModalPos.bottom}px`;
+    });
+
+    // 全局样式
     const style = document.createElement('style');
     style.textContent = `
-        button {
-            transition: background-color 0.3s;
-        }
         button:hover {
             background-color: #ff6b81;
+            transform: scale(1.05);
         }
         div {
             font-family: Arial, sans-serif;
         }
     `;
     document.head.appendChild(style);
-
 })();
