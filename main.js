@@ -4,10 +4,10 @@
 // @version             1.0
 // @description         在B站视频页添加解析视频按钮
 // @author              Waves_Man
-// @author-github       https://github.com/Waves-Man
-// @author-homepage     http://home.foreve.asia
+// @author-github       https://github.com/WavesMan
+// @author-homepage     http://home.waveyo.cn
 // @match               https://www.bilibili.com/video/*
-// @icon                https://pic.nfcraft.club//website/home.foreve.asia/images/icon/favicon.ico
+// @icon                https://cloud.waveyo.cn//Services/websites/home/images/icon/favicon.ico
 // @original-script     https://scriptcat.org/zh-CN/script-show-page/2682/
 // @grant               none
 // @license             GPL-2.0 license
